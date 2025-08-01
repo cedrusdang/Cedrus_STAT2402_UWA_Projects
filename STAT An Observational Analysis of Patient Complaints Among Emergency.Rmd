@@ -1,0 +1,249 @@
+---
+title: "STAT2402 Analysis of Observations - Final Examination: Journal Article"
+author: "24190901 - Cedrus Dang"
+date: "`r Sys.Date()`"
+output: 
+  word_document:
+    keep_md: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T,eval = T)
+```
+
+# **APENDIX: R CODE AND TECHNICAL ANALYSIS**
+
+## **1. Explanatory Data Analysis**
+
+First, we use a summary to analyse the data:
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+data <- read.csv("compdat.txt", sep = "\t")
+data$residency <- as.factor(data$residency) 
+data$gender <- as.factor(data$gender) 
+data2 <- data
+summary(data)
+```
+
+We then calculated the standard deviation of each numerical variable.
+
+```{r}
+round(sd(data$visits),2)
+round(sd(data$complaints),2)
+round(sd(data$revenue),2)
+round(sd(data$hours),2)
+```
+
+We then use histograms to analyse the distribution of the numerical variables.
+
+```{r}
+par(mfrow = c(2, 2))
+hist(data$complaints)
+abline(v = mean(data$complaints), col = "red", lwd = 2, lty = 2,)
+hist(data$visits)
+abline(v = mean(data$visits), col = "red", lwd = 2, lty = 2)
+hist(data$revenue)
+abline(v = mean(data$revenue), col = "red", lwd = 2, lty = 2)
+hist(data$hours)
+abline(v = mean(data$hours), col = "red", lwd = 2, lty = 2)
+```
+
+The complaint’s plot shows a high volume of zero cases. We then used the scatter plots to analyse the relationship between complaints and other factors.
+
+```{r}
+par(mfrow = c(2, 3))
+plot(x = data$visits, y = data$complaints, xlab = "Number of Visits", ylab = "Number of Complaints")
+plot(x = data$revenue, y = data$complaints, xlab = "Revenue", ylab = "Number of Complaints")
+plot(x = data$hours, y = data$complaints, xlab = "Hours Worked", ylab = "Number of Complaints")
+plot(x = data$residency, y = data$complaints, xlab = "Residency (Y/N)", ylab = "Number of Complaints")
+plot(x = data$gender, y = data$complaints, xlab = "Gender (M/F)", ylab = "Number of Complaints")
+```
+
+The sign of zero inflation is clear in this plot. We then use a correlation matrix plot to figure out if there is a high correlation between variables.
+
+```{r message=FALSE, warning=FALSE}
+# Load necessary libraries
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+data2$gender_male <- ifelse(data2$gender == "M", 1, 0)  # M/F becomes 1/2
+data2$residency_yes <- ifelse(data2$residency == "Y", 1, 0)  # Y = 1, N = 0
+# Include categorical variables in the correlation matrix
+continuous_vars <- data2[, c("complaints", "visits", "revenue", "hours", "gender_male","residency_yes")]
+# Calculate the correlation matrix
+cor_matrix <- cor(continuous_vars)
+# Visualize the correlation matrix with numbers in the upper triangle
+corrplot(cor_matrix, method = "circle", 
+         addCoef.col = "black", 
+         tl.col = "black", tl.srt = 30) 
+```
+
+The plot shows that there is no high correlation in the matrix. However, the low correlation with complaints suggests there will be a challenge in fitting models using this data.
+
+**2. Model Fitting: Poisson Model**
+
+We begin to fit the Poisson model with all two-way interactions and then use the AIC step-wide backward method to reduce it.
+
+```{r}
+library(MASS)
+# Full model with all two-way interactions
+model_Poisson_full <- glm(complaints ~ 
+                            (visits + residency + gender + revenue + hours)^2,
+                              data = data, family = poisson(link = "log"))
+# Stepwise backward selection (based on AIC)
+model_Poisson <- stepAIC(object = model_Poisson_full,
+                         direction = "backward", trace = F)
+summary(model_Poisson)
+```
+
+We then used diagnostic plots on the model.
+
+```{r}
+# Odds Ratios (Exponentiated Coefficients)
+par(mfrow=c(2, 2))
+plot(model_Poisson)
+```
+
+In the Q-Q residual plot, it seems the model is not working well at the end of the tail. Meanwhile, other plots show an acceptable fit with the data. We then conduct the over-dispersion test using this model.
+
+```{r message=FALSE, warning=FALSE}
+library(AER)
+dispersiontest(model_Poisson) 
+# Mean and variance check for numerical variables
+cat("Visits: mean =", mean(data$visits),
+    "- variance =", var(data$visits), "\n")
+cat("Revenue: mean =", mean(data$revenue),
+    "- variance =", var(data$revenue), "\n")
+cat("Hours: mean =", mean(data$hours),
+    "- variance =", var(data$hours), "\n")
+```
+
+The result indicates a high chance that there is over-dispersion in the data.
+
+**3. Model Fitting: Negative Binomial Model**
+
+We begin to fit the Negative Binomial model with all two-way interactions and then use the AIC step-wide backward method to reduce it.
+
+```{r}
+library(MASS)
+# Negative Binomial full model with all two-way interactions
+model_NB_full <- glm.nb(complaints ~ 
+                          (visits + residency + gender + revenue + hours)^2,
+                              data = data)
+# Step wise backward selection based on AIC
+model_NB <- stepAIC(object = model_NB_full, 
+                      direction = "backward", trace = F)
+summary(model_NB)
+```
+
+We then used diagnostic plots on the model.
+
+```{r}
+par(mfrow=c(2, 2))
+plot(model_NB)
+```
+
+Diagnostic plots show a better fit in this model than the Poisson model.
+
+**4. Model Fitting: Zero-Inflated Poisson Model**
+
+First, we try to fit the Zero-Inflated Poisson Model with all variables and suitable two-way interactions to avoid issues with model convergence or multicollinearity we have when using all interactions.
+
+```{r}
+model_ZIP <- zeroinfl(complaints ~ 
+                          visits+ hours+ revenue + (residency + gender)^2|
+                          visits+ hours+ revenue + (residency + gender)^2, 
+                           data = data, dist = 'poisson')
+summary(model_ZIP)
+AIC(model_ZIP)
+```
+
+The AIC of the model is better than the previous models, and it is reasonable; further reducing or increasing the complexity did not give a better result. We then used diagnostic plots on the model.
+
+**5. Model Fitting: Zero-Inflated Negative Binomial Model**
+
+We begin to fit the Zero-Inflated Negative Binomial model with all variables and suitable two-way interactions to avoid issues with model convergence or multicollinearity we have when using all interactions.
+
+```{r}
+model_ZINB <- zeroinfl(complaints ~ 
+                          visits+ hours+ revenue + (residency + gender)^2|
+                          visits+ hours+ revenue + (residency + gender)^2, 
+                           data = data, dist = 'negbin')
+summary(model_ZINB)
+AIC(model_ZINB)
+```
+
+The AIC of the model is better than the previous models, and it is reasonable but not as good as the ZIP model; further reducing or increasing the complexity did not give better results. We then used diagnostic plots on the model.
+
+**6. Model Comparison**
+
+We first conduct an AIC comparison between models.
+
+```{r}
+AIC(model_Poisson)
+AIC(model_NB)
+AIC(model_ZIP)
+AIC(model_ZINB)
+```
+
+ZIP model give the Lowest AIC value, this indicate it is optimal model in this comparison. We then conduct Vuong’s tests to test if ZIP and ZINB models are better than Poisson and NB models
+
+```{r}
+vuong(model_Poisson, model_ZIP)
+```
+
+```{r}
+vuong(model_Poisson, model_ZINB)
+```
+
+```{r}
+vuong(model_NB, model_ZIP)
+```
+
+```{r}
+vuong(model_NB, model_ZINB)
+```
+
+We then conduct diagnostic plots on each model to ensure the ZIP model fits well with the data.
+
+```{r}
+par(mfrow=c(2, 4))
+residuals_Poisson <- residuals(model_Poisson, type = "pearson")
+plot(fitted(model_Poisson), residuals_Poisson, 
+     xlab = "Fitted values", ylab = "Pearson Residuals", 
+     main = "Poisson")
+abline(h = 0, col = "red")
+plot(seq_along(residuals_Poisson), residuals_Poisson, 
+     xlab = "Index", ylab = "Pearson Residuals", 
+     main = "Poisson")
+abline(h = 0, col = "red")
+residuals_NB <- residuals(model_NB, type = "pearson")
+plot(fitted(model_ZIP), residuals_NB, 
+     xlab = "Fitted values", ylab = "Pearson Residuals", 
+     main = "NB Model")
+abline(h = 0, col = "red")
+plot(seq_along(residuals_NB), residuals_NB, 
+     xlab = "Index", ylab = "Pearson Residuals", 
+     main = "NB Model")
+abline(h = 0, col = "red")
+
+residuals_zip <- residuals(model_ZIP, type = "pearson")
+plot(fitted(model_ZIP), residuals_zip, 
+     xlab = "Fitted values", ylab = "Pearson Residuals", 
+     main = "ZIP Model")
+abline(h = 0, col = "red")
+plot(seq_along(residuals_zip), residuals_zip, 
+     xlab = "Index", ylab = "Pearson Residuals", 
+     main = "ZIP Model")
+abline(h = 0, col = "red")
+residuals_ZINB <- residuals(model_ZINB, type = "pearson")
+plot(fitted(model_ZIP), residuals_ZINB, 
+     xlab = "Fitted values", ylab = "Pearson Residuals", 
+     main = "ZINB Model")
+abline(h = 0, col = "red")
+plot(seq_along(residuals_ZINB), residuals_ZINB, 
+     xlab = "Index", ylab = "Pearson Residuals", 
+     main = "ZINB Model")
+abline(h = 0, col = "red")
+```
